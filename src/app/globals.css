@@ -1,0 +1,43 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+Lao:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap");
+@import "tailwindcss";
+
+:root {
+  --color-primary: #6366f1;
+  --color-navy: #111827;
+  --color-bg: #f5f6fa;
+}
+
+body {
+  margin: 0;
+  font-family: "Noto Sans Lao", "Inter", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--color-bg);
+  color: var(--color-navy);
+}
+
+/* Ant Design overrides */
+.ant-layout-sider {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
+.ant-menu-item-group-title {
+  font-size: 11px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.5;
+  padding-left: 20px !important;
+}
+
+/* Smooth transitions for layout */
+.ant-layout {
+  transition: all 0.2s ease;
+}
+
+/* Card hover effect */
+.ant-card-hoverable:hover {
+  transform: translateY(-2px);
+  transition: all 0.2s ease;
+}

@@ -7,6 +7,8 @@ import {
   DashboardOutlined,
   BankOutlined,
   AppstoreOutlined,
+  DollarOutlined,
+  SafetyOutlined,
   SettingOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -17,6 +19,7 @@ import { useI18n } from "@/i18n/context";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Logo from "@/components/Logo";
 import LanguageSwitch from "@/components/LanguageSwitch";
+import NotificationBell from "@/components/NotificationBell";
 import type { MenuProps } from "antd";
 
 const { Header, Sider, Content } = Layout;
@@ -50,6 +53,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (pathname === "/") return "/";
     if (pathname.startsWith("/companies")) return "/companies";
     if (pathname.startsWith("/packages")) return "/packages";
+    if (pathname.startsWith("/billing")) return "/billing";
+    if (pathname.startsWith("/platform-users")) return "/platform-users";
     if (pathname.startsWith("/settings")) return "/settings";
     return pathname;
   };
@@ -70,6 +75,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       icon: <AppstoreOutlined />,
       label: t.nav.packages,
     },
+    {
+      key: "/billing",
+      icon: <DollarOutlined />,
+      label: t.nav.billing,
+    },
+    ...(user.roles?.includes("superadmin")
+      ? [
+          {
+            key: "/platform-users",
+            icon: <SafetyOutlined />,
+            label: t.nav.platformUsers,
+          },
+        ]
+      : []),
     { type: "divider" },
     {
       key: "/settings",
@@ -140,6 +159,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
 
           <Space size={16}>
+            <NotificationBell />
             <LanguageSwitch />
             <Dropdown
               menu={{

@@ -4,24 +4,34 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   App,
+  Avatar,
   Button,
   Card,
+  DatePicker,
   Drawer,
   Form,
   Input,
   Select,
   Space,
+  Statistic,
   Table,
   Tag,
   Tooltip,
   Typography,
+  Upload,
   theme,
 } from "antd";
 import {
   PlusOutlined,
   ReloadOutlined,
   EyeOutlined,
+  BankOutlined,
+  UploadOutlined,
+  TeamOutlined,
+  CheckCircleOutlined,
+  StopOutlined,
 } from "@ant-design/icons";
+import type { Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
 import SearchInput from "@/components/SearchInput";
 import SlugBadge from "@/components/SlugBadge";
@@ -29,6 +39,7 @@ import { useI18n } from "@/i18n/context";
 import api from "@/lib/api";
 import { applyApiErrorToForm, getApiErrorMessage } from "@/lib/apiError";
 import { ADMIN_ENDPOINTS } from "@/lib/endpoints";
+import { INDUSTRY_KEYS, SIZE_KEYS, LOGO_ACCEPT } from "@/lib/companyProfile";
 import { fieldRequired, slugify } from "@/lib/format";
 import { defaultPagination } from "@/lib/pagination";
 import { useFormSubmittable } from "@/lib/useFormSubmittable";
@@ -40,6 +51,9 @@ type CreateCompanyFormValues = {
   name: string;
   slug: string;
   plan: string;
+  industry?: string;
+  company_size?: string;
+  about?: string;
   admin_email: string;
   admin_password: string;
   admin_first_name: string;
@@ -55,8 +69,12 @@ export default function CompaniesPage() {
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string>("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [industryFilter, setIndustryFilter] = useState<string>("all");
+  const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [planOptions, setPlanOptions] = useState<PackageOption[]>([]);
   const [form] = Form.useForm<CreateCompanyFormValues>();
   const ok = useFormSubmittable(form);
@@ -84,7 +102,8 @@ export default function CompaniesPage() {
     setLoading(true);
     try {
       const { data } = await api.get<ApiResponse<Tenant[]>>(
-        ADMIN_ENDPOINTS.TENANTS
+        ADMIN_ENDPOINTS.TENANTS,
+        { params: { per_page: 100 } }
       );
       setTenants(data.data || []);
     } catch (err) {
@@ -100,6 +119,8 @@ export default function CompaniesPage() {
   }, [fetchTenants, fetchPackages]);
 
   const filteredTenants = useMemo(() => {
+    const from = dateRange?.[0]?.startOf("day").valueOf();
+    const to = dateRange?.[1]?.endOf("day").valueOf();
     return tenants.filter((tenant) => {
       const matchesSearch =
         !search ||
@@ -107,17 +128,55 @@ export default function CompaniesPage() {
         tenant.slug.toLowerCase().includes(search.toLowerCase());
       const matchesStatus =
         statusFilter === "all" || tenant.status === statusFilter;
-      return matchesSearch && matchesStatus;
+      const matchesIndustry =
+        industryFilter === "all" || tenant.industry === industryFilter;
+      const created = new Date(tenant.created_at).getTime();
+      const matchesDate =
+        (from === undefined || created >= from) &&
+        (to === undefined || created <= to);
+      return matchesSearch && matchesStatus && matchesIndustry && matchesDate;
     });
-  }, [tenants, search, statusFilter]);
+  }, [tenants, search, statusFilter, industryFilter, dateRange]);
+
+  const stats = useMemo(
+    () => ({
+      total: tenants.length,
+      active: tenants.filter((x) => x.status === "active").length,
+      suspended: tenants.filter((x) => x.status === "suspended").length,
+      users: tenants.reduce((sum, x) => sum + (x.user_count || 0), 0),
+    }),
+    [tenants]
+  );
+
+  const resetCreateForm = () => {
+    form.resetFields();
+    setLogoFile(null);
+    setLogoPreview("");
+  };
 
   const handleCreate = async (values: CreateCompanyFormValues) => {
     setCreating(true);
     try {
-      await api.post<ApiResponse<Tenant>>(ADMIN_ENDPOINTS.TENANTS, values);
+      const { data } = await api.post<ApiResponse<{ id: string }>>(
+        ADMIN_ENDPOINTS.TENANTS,
+        values
+      );
+      // Logo is uploaded after creation because the endpoint is keyed by tenant id.
+      const newId = data.data?.id;
+      if (logoFile && newId) {
+        try {
+          const fd = new FormData();
+          fd.append("file", logoFile);
+          await api.post(ADMIN_ENDPOINTS.TENANT_LOGO(newId), fd, {
+            headers: { "Content-Type": "multipart/form-data" },
+          });
+        } catch {
+          message.warning(t.companies.logoUploadLater);
+        }
+      }
       message.success(t.companies.createSuccess);
       setDrawerOpen(false);
-      form.resetFields();
+      resetCreateForm();
       fetchTenants();
     } catch (err) {
       if (!applyApiErrorToForm(err, form)) {
@@ -173,6 +232,21 @@ export default function CompaniesPage() {
           {status === "active" ? t.common.active : t.companies.suspended}
         </Tag>
       ),
+    },
+    {
+      title: t.companies.industry,
+      dataIndex: "industry",
+      key: "industry",
+      render: (industry?: string) =>
+        industry ? (
+          <Tag>
+            {t.companies.industries[
+              industry as keyof typeof t.companies.industries
+            ] || industry}
+          </Tag>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
     },
     {
       title: t.companies.users,
@@ -244,12 +318,53 @@ export default function CompaniesPage() {
         </Space>
       </div>
 
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gap: 16,
+          marginBottom: 24,
+        }}
+      >
+        <Card size="small">
+          <Statistic
+            title={t.dashboard.totalCompanies}
+            value={stats.total}
+            prefix={<BankOutlined style={{ color: token.colorPrimary }} />}
+          />
+        </Card>
+        <Card size="small">
+          <Statistic
+            title={t.dashboard.activeCompanies}
+            value={stats.active}
+            prefix={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}
+            styles={{ content: { color: token.colorSuccess } }}
+          />
+        </Card>
+        <Card size="small">
+          <Statistic
+            title={t.dashboard.suspendedCompanies}
+            value={stats.suspended}
+            prefix={<StopOutlined style={{ color: token.colorError }} />}
+            styles={{ content: { color: token.colorError } }}
+          />
+        </Card>
+        <Card size="small">
+          <Statistic
+            title={t.dashboard.totalUsers}
+            value={stats.users}
+            prefix={<TeamOutlined style={{ color: token.colorPrimary }} />}
+          />
+        </Card>
+      </div>
+
       <Card>
         <div
           style={{
             display: "flex",
             gap: 16,
             marginBottom: 16,
+            flexWrap: "wrap",
           }}
         >
           <SearchInput
@@ -260,12 +375,32 @@ export default function CompaniesPage() {
           <Select
             value={statusFilter}
             onChange={setStatusFilter}
-            style={{ width: 160 }}
+            style={{ width: 150 }}
             options={[
               { value: "all", label: t.common.all },
               { value: "active", label: t.common.active },
               { value: "suspended", label: t.companies.suspended },
             ]}
+          />
+          <Select
+            value={industryFilter}
+            onChange={setIndustryFilter}
+            style={{ width: 180 }}
+            placeholder={t.companies.industry}
+            options={[
+              { value: "all", label: t.companies.allIndustries },
+              ...INDUSTRY_KEYS.map((k) => ({
+                value: k,
+                label: t.companies.industries[k],
+              })),
+            ]}
+          />
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={(range) => setDateRange(range)}
+            style={{ minWidth: 240 }}
+            placeholder={[t.companies.dateFrom, t.companies.dateTo]}
+            allowEmpty={[true, true]}
           />
         </div>
 
@@ -285,11 +420,11 @@ export default function CompaniesPage() {
         open={drawerOpen}
         onClose={() => {
           setDrawerOpen(false);
-          form.resetFields();
+          resetCreateForm();
         }}
         extra={
           <Space>
-            <Button onClick={() => { setDrawerOpen(false); form.resetFields(); }}>
+            <Button onClick={() => { setDrawerOpen(false); resetCreateForm(); }}>
               {t.common.cancel}
             </Button>
             <Button type="primary" loading={creating} disabled={!ok} onClick={() => form.submit()}>
@@ -356,6 +491,58 @@ export default function CompaniesPage() {
                 ),
               }))}
             />
+          </Form.Item>
+
+          <Form.Item label={t.companies.logo}>
+            <Space size={16} align="center">
+              <Avatar
+                shape="square"
+                size={56}
+                src={logoPreview || undefined}
+                icon={<BankOutlined />}
+                style={{ backgroundColor: token.colorFillSecondary }}
+              />
+              <Upload
+                accept={LOGO_ACCEPT}
+                showUploadList={false}
+                beforeUpload={(file) => {
+                  setLogoFile(file as File);
+                  setLogoPreview(URL.createObjectURL(file as File));
+                  return false;
+                }}
+              >
+                <Button icon={<UploadOutlined />}>{t.companies.changeLogo}</Button>
+              </Upload>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t.companies.logoHint}
+              </Typography.Text>
+            </Space>
+          </Form.Item>
+
+          <Form.Item name="industry" label={t.companies.industry}>
+            <Select
+              allowClear
+              placeholder={t.companies.industry}
+              options={INDUSTRY_KEYS.map((k) => ({
+                value: k,
+                label: t.companies.industries[k],
+              }))}
+            />
+          </Form.Item>
+
+          <Form.Item name="company_size" label={t.companies.companySize}>
+            <Select
+              allowClear
+              placeholder={t.companies.companySize}
+              options={SIZE_KEYS.map((k) => ({
+                value: k,
+                label: t.companies.sizes[k],
+              }))}
+            />
+          </Form.Item>
+
+          <Form.Item name="about" label={t.companies.about}>
+            <Input.TextArea rows={3} maxLength={2000} showCount />
           </Form.Item>
 
           <div

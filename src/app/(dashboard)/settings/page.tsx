@@ -13,6 +13,7 @@ import {
   Typography,
 } from "antd";
 import {
+  BankOutlined,
   GlobalOutlined,
   KeyOutlined,
   UserOutlined,
@@ -23,6 +24,7 @@ import api from "@/lib/api";
 import { applyApiErrorToForm, getApiErrorMessage } from "@/lib/apiError";
 import { AUTH_ENDPOINTS } from "@/lib/endpoints";
 import { useFormSubmittable } from "@/lib/useFormSubmittable";
+import BankAccountsManager from "@/components/BankAccountsManager";
 
 const { Title } = Typography;
 
@@ -43,6 +45,10 @@ export default function SettingsPage() {
   const [form] = Form.useForm<ChangePasswordForm>();
   const ok = useFormSubmittable(form);
   const [submitting, setSubmitting] = useState(false);
+
+  const canEditBank = (user?.roles ?? []).some(
+    (r) => r === "superadmin" || r === "admin"
+  );
 
   if (!user) return null;
 
@@ -180,6 +186,18 @@ export default function SettingsPage() {
             {t.settings.changePassword}
           </Button>
         </Form>
+      </Card>
+
+      <Card
+        title={
+          <Space>
+            <BankOutlined />
+            {t.bank.title}
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+      >
+        <BankAccountsManager canEdit={canEditBank} />
       </Card>
 
       <Card

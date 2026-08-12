@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   App,
+  Avatar,
   Button,
   Card,
   Descriptions,
@@ -18,10 +19,12 @@ import {
   Tag,
   Tooltip,
   Typography,
+  Upload,
   theme,
 } from "antd";
 import {
   ArrowLeftOutlined,
+  BankOutlined,
   CheckCircleOutlined,
   CopyOutlined,
   EditOutlined,
@@ -29,13 +32,16 @@ import {
   LinkOutlined,
   PlusOutlined,
   StopOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import SlugBadge from "@/components/SlugBadge";
+import { TenantBillingPanel } from "@/components/billing/TenantBillingPanel";
 import { useI18n } from "@/i18n/context";
 import api from "@/lib/api";
 import { applyApiErrorToForm, getApiErrorMessage } from "@/lib/apiError";
 import { ADMIN_ENDPOINTS } from "@/lib/endpoints";
+import { INDUSTRY_KEYS, SIZE_KEYS, LOGO_ACCEPT } from "@/lib/companyProfile";
 import { fieldRequired } from "@/lib/format";
 import { defaultPagination } from "@/lib/pagination";
 import { useFormSubmittable } from "@/lib/useFormSubmittable";
@@ -71,6 +77,7 @@ export default function CompanyDetailPage() {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
   const [editForm] = Form.useForm();
   const editOk = useFormSubmittable(editForm, { initiallyEnabled: true });
   const [userModalOpen, setUserModalOpen] = useState(false);
@@ -234,8 +241,28 @@ export default function CompanyDetailPage() {
       name: tenant?.name,
       plan: tenant?.plan,
       status: tenant?.status,
+      industry: tenant?.industry || undefined,
+      company_size: tenant?.company_size || undefined,
+      about: tenant?.about || "",
     });
     setEditOpen(true);
+  };
+
+  const handleLogoUpload = async (file: File) => {
+    setLogoUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      await api.post(ADMIN_ENDPOINTS.TENANT_LOGO(tenantId), fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      message.success(t.companies.logoUpdated);
+      fetchTenant();
+    } catch (err) {
+      message.error(getApiErrorMessage(err, t.common.error));
+    } finally {
+      setLogoUploading(false);
+    }
   };
 
   const openAddUser = () => {
@@ -407,6 +434,13 @@ export default function CompanyDetailPage() {
             {t.common.back}
           </Button>
         </Tooltip>
+        <Avatar
+          shape="square"
+          size={48}
+          src={tenant.logo_url || undefined}
+          icon={<BankOutlined />}
+          style={{ backgroundColor: token.colorFillSecondary, flexShrink: 0 }}
+        />
         <div>
           <Title level={3} style={{ margin: 0 }}>
             {tenant.name}
@@ -516,6 +550,37 @@ export default function CompanyDetailPage() {
                         key: "created",
                         label: t.companies.createdDate,
                         children: new Date(tenant.created_at).toLocaleDateString(),
+                      },
+                      {
+                        key: "industry",
+                        label: t.companies.industry,
+                        children: tenant.industry ? (
+                          t.companies.industries[
+                            tenant.industry as keyof typeof t.companies.industries
+                          ] || tenant.industry
+                        ) : (
+                          <Text type="secondary">{t.companies.notSet}</Text>
+                        ),
+                      },
+                      {
+                        key: "size",
+                        label: t.companies.companySize,
+                        children: tenant.company_size ? (
+                          t.companies.sizes[
+                            tenant.company_size as keyof typeof t.companies.sizes
+                          ] || tenant.company_size
+                        ) : (
+                          <Text type="secondary">{t.companies.notSet}</Text>
+                        ),
+                      },
+                      {
+                        key: "about",
+                        label: t.companies.about,
+                        children: tenant.about ? (
+                          <span style={{ whiteSpace: "pre-wrap" }}>{tenant.about}</span>
+                        ) : (
+                          <Text type="secondary">{t.companies.notSet}</Text>
+                        ),
                       },
                     ]}
                   />
@@ -667,6 +732,15 @@ export default function CompanyDetailPage() {
                       );
                     })}
                   </div>
+
+                  <Title level={5} style={{ margin: "28px 0 16px" }}>
+                    {t.billing.title}
+                  </Title>
+                  <TenantBillingPanel
+                    tenantId={tenantId}
+                    subscription={tenant.subscription}
+                    onChanged={fetchTenant}
+                  />
                 </div>
               ),
             },
@@ -769,6 +843,32 @@ export default function CompanyDetailPage() {
         okButtonProps={{ disabled: !editOk }}
       >
         <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item label={t.companies.logo}>
+            <Space size={16} align="center">
+              <Avatar
+                shape="square"
+                size={64}
+                src={tenant.logo_url || undefined}
+                icon={<BankOutlined />}
+                style={{ backgroundColor: token.colorFillSecondary }}
+              />
+              <Upload
+                accept={LOGO_ACCEPT}
+                showUploadList={false}
+                beforeUpload={(file) => {
+                  handleLogoUpload(file as File);
+                  return false;
+                }}
+              >
+                <Button icon={<UploadOutlined />} loading={logoUploading}>
+                  {t.companies.changeLogo}
+                </Button>
+              </Upload>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {t.companies.logoHint}
+              </Text>
+            </Space>
+          </Form.Item>
           <Form.Item
             name="name"
             label={t.companies.companyName}
@@ -809,6 +909,31 @@ export default function CompanyDetailPage() {
                 { value: "trial", label: t.common.trial },
               ]}
             />
+          </Form.Item>
+          <Form.Item name="industry" label={t.companies.industry}>
+            <Select
+              size="large"
+              allowClear
+              placeholder={t.companies.industry}
+              options={INDUSTRY_KEYS.map((k) => ({
+                value: k,
+                label: t.companies.industries[k],
+              }))}
+            />
+          </Form.Item>
+          <Form.Item name="company_size" label={t.companies.companySize}>
+            <Select
+              size="large"
+              allowClear
+              placeholder={t.companies.companySize}
+              options={SIZE_KEYS.map((k) => ({
+                value: k,
+                label: t.companies.sizes[k],
+              }))}
+            />
+          </Form.Item>
+          <Form.Item name="about" label={t.companies.about}>
+            <Input.TextArea rows={3} maxLength={2000} showCount />
           </Form.Item>
         </Form>
       </Modal>

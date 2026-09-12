@@ -1,0 +1,140 @@
+name: Deploy Super Admin Console
+
+# Continuous deployment of the platform super-admin console (admin.nexton.work).
+#
+# Same release-directory + blue-green scheme as the tenant portal
+# (nexton_web_admin) and the VPS's own /root/nexton/deploy-front.sh: each deploy
+# lands in its own timestamped release directory, a NEW container is started and
+# health-checked over the docker network, and only then is the old one retired
+# and the new one renamed into place. Zero downtime, and a bad build never takes
+# the console down.
+#
+# The build runs here, never on the VPS — the box has 2GB RAM and `next build`
+# OOMs on it.
+#
+# nginx routes to the console by CONTAINER NAME (`proxy_pass $admin_upstream`
+# -> http://nexton-admin:3001, resolved per request). The container name and
+# port below are therefore load-bearing, not cosmetic: change them and the
+# deploy silently stops reaching production.
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexton-admin-deploy-production
+  cancel-in-progress: false
+
+env:
+  SERVER: root@209.97.165.92
+  NETWORK: nexton_nexton
+  CONTAINER: nexton-admin
+  PORT: "3001"
+  NGINX: nexton-nginx
+  RELEASES_DIR: /root/nexton/releases/admin
+  CURRENT_LINK: /root/nexton/current/admin
+  SSH_OPTS: -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+
+jobs:
+  deploy:
+    name: Build and deploy admin console
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20 # matches the node:20-alpine runtime container
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Reports but does not block. There is a pre-existing backlog of 2 eslint
+      # errors (react-hooks/set-state-in-effect in NotificationBell.tsx and
+      # i18n/context.tsx), so gating deploys on a clean lint would mean never
+      # deploying. The build below is the real gate. Drop continue-on-error
+      # once the backlog is cleared.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Build standalone bundle
+        env:
+          # The console calls its OWN origin, not api.nexton.work: nginx routes
+          # admin.nexton.work/api/ -> the API with Host: admin.nexton.work, so
+          # requests are same-origin (no CORS) and the backend sees the reserved
+          # "admin" host — the login path that keeps working when
+          # TENANT_STRICT_MODE is on. Same values the Makefile `build` target uses.
+          NEXT_PUBLIC_API_URL: https://admin.nexton.work
+          NEXT_PUBLIC_TENANT_ROOT_DOMAIN: nexton.work
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run build
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+
+      # A fresh release directory, never the live one. --link-dest hardlinks
+      # unchanged files against the currently-serving release, so a release
+      # costs only its delta on disk.
+      - name: Stage new release
+        id: stage
+        run: |
+          RELEASE="$RELEASES_DIR/$(date -u +%Y%m%d-%H%M%S)"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "Staging into $RELEASE"
+
+          PREV=$(ssh $SSH_OPTS $SERVER "readlink -f '$CURRENT_LINK' 2>/dev/null || true")
+          LD=""; LD_STATIC=""; LD_PUBLIC=""
+          if [ -n "$PREV" ]; then
+            echo "Hardlinking unchanged files against previous release: $PREV"
+            LD="--link-dest=$PREV"
+            LD_STATIC="--link-dest=$PREV/.next/static"
+            LD_PUBLIC="--link-dest=$PREV/public"
+          fi
+
+          ssh $SSH_OPTS $SERVER "mkdir -p '$RELEASE'"
+          rsync -az -e "ssh $SSH_OPTS" $LD        .next/standalone/ $SERVER:$RELEASE/
+          rsync -az -e "ssh $SSH_OPTS" $LD_STATIC .next/static/     $SERVER:$RELEASE/.next/static/
+          rsync -az -e "ssh $SSH_OPTS" $LD_PUBLIC public/           $SERVER:$RELEASE/public/
+          ssh $SSH_OPTS $SERVER "chown -R 1000:1000 '$RELEASE'"
+
+      # Shared with the Makefile `deploy` target so the two cannot drift.
+      - name: Blue-green swap
+        run: |
+          ssh $SSH_OPTS $SERVER \
+            "NETWORK='$NETWORK' RELEASE='${{ steps.stage.outputs.release }}' \
+             CONTAINER='$CONTAINER' PORT='$PORT' \
+             CURRENT_LINK='$CURRENT_LINK' NGINX='$NGINX' bash -s" \
+            < scripts/deploy-admin-remote.sh
+
+      # The container being healthy is NOT proof the deploy reached production:
+      # a container on the wrong name or port passes its own health check while
+      # nginx keeps serving the old one. This asks nginx, through the real
+      # hostname, which is the only check that would have caught that.
+      - name: Verify through nginx
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://admin.nexton.work/ || echo 000)
+            echo "Attempt ${attempt}: HTTP ${code}"
+            if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
+              echo "Admin console is answering through nginx (HTTP ${code})."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Admin console did not answer through nginx. The new container may be running but not routed."
+          ssh $SSH_OPTS $SERVER "docker logs --tail 50 $CONTAINER" || true
+          exit 1

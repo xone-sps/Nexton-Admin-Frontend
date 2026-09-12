@@ -47,10 +47,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20 # matches the node:20-alpine runtime container
           cache: npm
@@ -58,14 +58,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Reports but does not block. There is a pre-existing backlog of 2 eslint
-      # errors (react-hooks/set-state-in-effect in NotificationBell.tsx and
-      # i18n/context.tsx), so gating deploys on a clean lint would mean never
-      # deploying. The build below is the real gate. Drop continue-on-error
-      # once the backlog is cleared.
       - name: Lint
         run: npm run lint
-        continue-on-error: true
 
       - name: Build standalone bundle
         env:

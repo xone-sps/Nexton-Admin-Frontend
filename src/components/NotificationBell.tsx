@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge, Dropdown, Empty, Tag, Typography, theme } from "antd";
 import {
@@ -24,22 +24,30 @@ export default function NotificationBell() {
   const router = useRouter();
   const [items, setItems] = useState<AdminNotification[]>([]);
 
-  const fetchNotifications = useCallback(async () => {
-    try {
-      const { data } = await api.get<ApiResponse<NotificationsResponse>>(
-        ADMIN_ENDPOINTS.NOTIFICATIONS
-      );
-      setItems(data.data?.items || []);
-    } catch {
-      /* non-critical */
-    }
-  }, []);
-
+  // Poll inside the effect and only touch state from the response callback:
+  // a synchronous setState in the effect body trips react-hooks/set-state-in-effect,
+  // and the guard drops responses that land after the bell has unmounted.
   useEffect(() => {
-    fetchNotifications();
-    const id = setInterval(fetchNotifications, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [fetchNotifications]);
+    let cancelled = false;
+
+    const load = () => {
+      api
+        .get<ApiResponse<NotificationsResponse>>(ADMIN_ENDPOINTS.NOTIFICATIONS)
+        .then(({ data }) => {
+          if (!cancelled) setItems(data.data?.items || []);
+        })
+        .catch(() => {
+          /* non-critical */
+        });
+    };
+
+    load();
+    const id = setInterval(load, REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   const menu = (
     <div
